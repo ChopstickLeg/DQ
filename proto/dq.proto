@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package dq.v1;
+
+enum JobStatus {
+    JOB_STATUS_UNSPECIFIED = 0;
+    JOB_STATUS_PENDING = 1;
+    JOB_STATUS_COMPLETED = 2;
+    JOB_STATUS_ERROR = 3;
+}
+
+
+service QueueService {
+    // Returns a job ID only after the pending job commits to SQLite.
+    // A duplicate (function_name, submission_key) returns ALREADY_EXISTS.
+    rpc Enqueue (EnqueueRequest) returns (EnqueueResponse);
+    // Returns persisted state, metadata, and arguments, or NOT_FOUND.
+    rpc GetJobStatus (GetJobStatusRequest) returns (GetJobStatusResponse);
+}
+
+message EnqueueRequest {
+    string function_name = 1;
+    string submission_key = 2;
+    bytes arguments = 3;
+    string caller = 4;
+}
+
+message EnqueueResponse {
+    string job_id = 1;
+}
+
+message GetJobStatusRequest {
+    string job_id = 1;
+}
+
+message GetJobStatusResponse {
+    JobStatus status = 1;
+    string function_name = 2;
+    string caller = 3;
+    bytes arguments = 4;
+}
