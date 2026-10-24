@@ -8,11 +8,12 @@ use crate::proto::{EnqueueRequest, EnqueueResponse, GetJobStatusRequest, GetJobS
 #[derive(Debug)]
 pub struct QueueServiceHandler {
     pool: SqlitePool,
+    dispatch_tx: tokio::sync::mpsc::Sender<String>,
 }
 
 impl QueueServiceHandler {
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+    pub fn new(pool: SqlitePool, dispatch_tx: tokio::sync::mpsc::Sender<String>) -> Self {
+        Self { pool, dispatch_tx }
     }
 }
 
@@ -47,6 +48,13 @@ impl QueueService for QueueServiceHandler {
             }
             _ => Status::internal(format!("Failed to enqueue job: {}", error)),
         })?;
+
+        if let Err(error) = self.dispatch_tx.send(id.clone()).await {
+            return Err(Status::internal(format!(
+                "Failed to send job to dispatcher: {}",
+                error
+            )));
+        }
 
         let response = EnqueueResponse { job_id: id };
 
