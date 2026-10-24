@@ -53,6 +53,9 @@ database, use `sqlite::memory:`. Jobs in that database do not survive a restart.
 
 ## Run the integration checks
 
+See [telemetry configuration](docs/telemetry.md) to export OpenTelemetry logs,
+traces, and metrics. Export is disabled until an OTLP endpoint is configured.
+
 Run the five gRPC integration checks:
 
 ```powershell

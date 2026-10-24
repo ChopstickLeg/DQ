@@ -1,19 +1,30 @@
+use std::sync::Arc;
+
 use sqlx::SqlitePool;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
 use crate::proto::queue_service_server::QueueService;
 use crate::proto::{EnqueueRequest, EnqueueResponse, GetJobStatusRequest, GetJobStatusResponse};
+use crate::telemetry::{DispatchJob, Instrumentation};
 
-#[derive(Debug)]
 pub struct QueueServiceHandler {
     pool: SqlitePool,
-    dispatch_tx: tokio::sync::mpsc::Sender<String>,
+    dispatch_tx: tokio::sync::mpsc::Sender<DispatchJob>,
+    instrumentation: Arc<Instrumentation>,
 }
 
 impl QueueServiceHandler {
-    pub fn new(pool: SqlitePool, dispatch_tx: tokio::sync::mpsc::Sender<String>) -> Self {
-        Self { pool, dispatch_tx }
+    pub fn new(
+        pool: SqlitePool,
+        dispatch_tx: tokio::sync::mpsc::Sender<DispatchJob>,
+        instrumentation: Arc<Instrumentation>,
+    ) -> Self {
+        Self {
+            pool,
+            dispatch_tx,
+            instrumentation,
+        }
     }
 }
 
@@ -23,7 +34,25 @@ impl QueueService for QueueServiceHandler {
         &self,
         request: Request<EnqueueRequest>,
     ) -> Result<Response<EnqueueResponse>, Status> {
-        let req = request.into_inner();
+        let (metadata, _, req) = request.into_parts();
+        self.instrumentation
+            .rpc("Enqueue", &metadata, self.enqueue_job(req))
+            .await
+    }
+
+    async fn get_job_status(
+        &self,
+        request: Request<GetJobStatusRequest>,
+    ) -> Result<Response<GetJobStatusResponse>, Status> {
+        let (metadata, _, req) = request.into_parts();
+        self.instrumentation
+            .rpc("GetJobStatus", &metadata, self.fetch_job_status(req))
+            .await
+    }
+}
+
+impl QueueServiceHandler {
+    async fn enqueue_job(&self, req: EnqueueRequest) -> Result<Response<EnqueueResponse>, Status> {
         let id = Uuid::now_v7().to_string();
         sqlx::query!(
             "INSERT INTO jobs (id, function_name, submission_key, arguments, caller)
@@ -49,23 +78,28 @@ impl QueueService for QueueServiceHandler {
             _ => Status::internal(format!("Failed to enqueue job: {}", error)),
         })?;
 
-        if let Err(error) = self.dispatch_tx.send(id.clone()).await {
+        if let Err(error) = self
+            .dispatch_tx
+            .send(self.instrumentation.dispatch_job(id.clone()))
+            .await
+        {
+            tracing::error!(target: "dq::grpc", job_id = %id, error = %error, "Job saved, but dispatcher notification failed");
             return Err(Status::internal(format!(
                 "Failed to send job to dispatcher: {}",
                 error
             )));
         }
 
+        tracing::info!(target: "dq::grpc", job_id = %id, "Job accepted");
         let response = EnqueueResponse { job_id: id };
 
         Ok(Response::new(response))
     }
 
-    async fn get_job_status(
+    async fn fetch_job_status(
         &self,
-        request: Request<GetJobStatusRequest>,
+        req: GetJobStatusRequest,
     ) -> Result<Response<GetJobStatusResponse>, Status> {
-        let req = request.into_inner();
         let result = sqlx::query_as!(
             GetJobStatusResponse,
             r#"

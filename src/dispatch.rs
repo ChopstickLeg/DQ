@@ -1,7 +1,11 @@
+use std::sync::Arc;
+
 use tokio::sync::mpsc;
 
-pub async fn run(mut rx: mpsc::Receiver<String>) {
-    !todo!(
-        "Implement the dispatch logic here. This function will receive messages from the mpsc channel and process them accordingly."
-    );
+use crate::telemetry::{DispatchJob, Instrumentation};
+
+pub async fn run(mut rx: mpsc::Receiver<DispatchJob>, instrumentation: Arc<Instrumentation>) {
+    while let Some(job) = rx.recv().await {
+        instrumentation.received(job).await;
+    }
 }
