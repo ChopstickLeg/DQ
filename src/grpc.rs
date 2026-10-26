@@ -1,11 +1,17 @@
 use std::sync::Arc;
 
-use sqlx::SqlitePool;
+use opentelemetry_otlp::tonic_types::metadata;
+use sqlx::{Execute, SqlitePool};
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
 use crate::proto::queue_service_server::QueueService;
-use crate::proto::{EnqueueRequest, EnqueueResponse, GetJobStatusRequest, GetJobStatusResponse};
+use crate::proto::{
+    EnqueueRequest, EnqueueResponse, ExecuteRequest, GetJobStatusRequest, GetJobStatusResponse,
+    SubscribeRequest,
+};
 use crate::telemetry::{DispatchJob, Instrumentation};
 
 pub struct QueueServiceHandler {
@@ -30,6 +36,8 @@ impl QueueServiceHandler {
 
 #[tonic::async_trait]
 impl QueueService for QueueServiceHandler {
+    type SubscribeStream = ReceiverStream<Result<ExecuteRequest, Status>>;
+
     async fn enqueue(
         &self,
         request: Request<EnqueueRequest>,
@@ -49,16 +57,27 @@ impl QueueService for QueueServiceHandler {
             .rpc("GetJobStatus", &metadata, self.fetch_job_status(req))
             .await
     }
+
+    async fn subscribe(
+        &self,
+        request: Request<SubscribeRequest>,
+    ) -> Result<Response<Self::SubscribeStream>, Status> {
+        let (metadata, _, req) = request.into_parts();
+        self.instrumentation
+            .rpc("Subscribe", &metadata, self.subscribe(req))
+            .await
+    }
 }
 
 impl QueueServiceHandler {
     async fn enqueue_job(&self, req: EnqueueRequest) -> Result<Response<EnqueueResponse>, Status> {
         let id = Uuid::now_v7().to_string();
         sqlx::query!(
-            "INSERT INTO jobs (id, function_name, submission_key, arguments, caller)
-                VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO jobs (id, function_name, service_name, submission_key, arguments, caller)
+                VALUES (?, ?, ?, ?, ?, ?)",
             id,
             req.function_name,
+            req.service_name,
             req.submission_key,
             req.arguments,
             req.caller,
@@ -106,6 +125,7 @@ impl QueueServiceHandler {
                 SELECT
                     status AS "status: i32",
                     function_name,
+                    service_name,
                     caller,
                     arguments
                 FROM jobs
@@ -121,5 +141,12 @@ impl QueueServiceHandler {
         })?;
 
         Ok(Response::new(result))
+    }
+
+    async fn subscribe(
+        &self,
+        req: SubscribeRequest,
+    ) -> Result<Response<<QueueServiceHandler as QueueService>::SubscribeStream>, Status> {
+        let (tx, rx) = mpsc::channel(32);
     }
 }
