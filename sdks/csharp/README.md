@@ -92,4 +92,6 @@ await foreach (var completion in completions.ResponseStream.ReadAllAsync(timeout
 
 Workers report errors with `FailAsync(job, error)`. Call
 `GetJobStatusAsync(jobId)` to retrieve a saved outcome after missing a live
-event. `QueueClient` defaults to plaintext gRPC at `http://127.0.0.1:50051`.
+event. The status response includes both arguments and the outcome and is subject
+to the [gRPC message size limit](../../docs/protocol.md#grpc-message-size-limits).
+`QueueClient` defaults to plaintext gRPC at `http://127.0.0.1:50051`.

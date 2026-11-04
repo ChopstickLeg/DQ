@@ -37,6 +37,23 @@ The job ID remains valid after a process restart when the server opens the same
 database file. Callers retrieve jobs through gRPC. They do not read or poll
 SQLite directly.
 
+## gRPC message size limits
+
+The server and both SDKs use a 4 MiB receive limit per encoded gRPC message.
+The limit includes the payload and the surrounding Protobuf fields. It applies
+to each message in a stream as well as to unary requests and responses.
+
+`Enqueue` and `CompleteExecution` send arguments and the outcome in separate
+requests. `GetJobStatus` sends the saved arguments and outcome together. For
+example, 3 MiB of arguments and a 3 MiB result can each be accepted and saved,
+but the combined status response exceeds the SDK receive limit. The SDK then
+reports `RESOURCE_EXHAUSTED` even though the job and result were saved.
+
+To keep status lookups readable, leave room within 4 MiB for the combined
+arguments, result or error, and other response fields. For large inputs and
+outputs, store the data outside DQ and pass a small reference to it in the
+arguments or result.
+
 ## Execution and completion
 
 `SubscribeExecution` takes a service name and a list of up to 1,000 function
@@ -61,7 +78,7 @@ matching listener receives the job ID, service, function, terminal status, and
 outcome for completions committed while its subscription is active. If a
 listener's server buffer fills, the server closes that stream. Completion
 streams have no replay. Listeners can recover missed outcomes for known job IDs
-with `GetJobStatus`.
+with `GetJobStatus`, subject to the [message size limits](#grpc-message-size-limits).
 
 An assigned job stays pending until its outcome commits. If the worker
 disconnects or the server restarts, the job is eligible for reassignment with a

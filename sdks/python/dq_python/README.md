@@ -62,7 +62,9 @@ with QueueClient() as caller:
 
 Workers can also report failures with `worker.complete(job, error="reason")`.
 Call `get_job_status(job_id)` to retrieve a saved outcome after missing a live
-event. Pass `host:port` to `QueueClient` to connect to another address. The SDK
+event. The status response includes both arguments and the outcome and is subject
+to the [gRPC message size limit](../../../docs/protocol.md#grpc-message-size-limits).
+Pass `host:port` to `QueueClient` to connect to another address. The SDK
 uses plaintext gRPC for local testing.
 
 ## Regenerate the bindings
