@@ -1,6 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
+    <Version>0.1.0</Version>
+    <Description>C# client and worker SDK for the DQ queue server.</Description>
+    <RepositoryUrl>https://github.com/ChopstickLeg/DQ</RepositoryUrl>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>

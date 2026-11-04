@@ -94,6 +94,9 @@ submission and retrieval assertions use gRPC. The
 [C# SDK](sdks/csharp/README.md) and [Python SDK](sdks/python/dq_python/README.md)
 also have integration tests that start the Rust server.
 
+See [CI and releases](docs/ci-release.md) for the required GitHub Actions check,
+release tags, and registry setup.
+
 Run the remaining checks with:
 
 ```powershell
