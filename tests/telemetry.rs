@@ -29,6 +29,73 @@ mod telemetry;
 
 use proto::queue_service_server::QueueService;
 
+#[tokio::test]
+async fn grpc_forwards_subscriptions_and_saved_enqueue_through_one_channel() {
+    let pool = db::connect("sqlite::memory:").await.unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+    let handler =
+        grpc::QueueServiceHandler::new(pool, tx, Arc::new(telemetry::Instrumentation::default()));
+    let subscription = proto::SubscribeRequest {
+        service_name: "smoke".into(),
+        function_names: vec!["smoke.echo".into()],
+    };
+    let _execution = handler
+        .subscribe_execution(Request::new(subscription.clone()))
+        .await
+        .unwrap();
+    let _completion = handler
+        .subscribe_completion(Request::new(subscription.clone()))
+        .await
+        .unwrap();
+    assert!(
+        matches!(rx.try_recv().unwrap(), dispatch::DispatchMessage::SubscribeExecution {
+            request, ..
+        } if request == subscription)
+    );
+    assert!(
+        matches!(rx.try_recv().unwrap(), dispatch::DispatchMessage::SubscribeCompletion {
+            request, ..
+        } if request == subscription)
+    );
+
+    let request = proto::EnqueueRequest {
+        service_name: "smoke".into(),
+        function_name: "smoke.echo".into(),
+        submission_key: "shared-channel".into(),
+        arguments: vec![0, 128, 255],
+        caller: "smoke-test".into(),
+    };
+    let response = handler
+        .enqueue(Request::new(request.clone()))
+        .await
+        .unwrap()
+        .into_inner();
+    let dispatch::DispatchMessage::Enqueue {
+        request: forwarded_request,
+        response: forwarded_response,
+        ..
+    } = rx.try_recv().unwrap()
+    else {
+        panic!("expected the saved enqueue request");
+    };
+    assert_eq!(forwarded_request, request);
+    assert_eq!(forwarded_response, response);
+    let saved = handler
+        .get_job_status(Request::new(proto::GetJobStatusRequest {
+            job_id: forwarded_response.job_id,
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(saved.arguments, request.arguments);
+    let error = handler.enqueue(Request::new(request)).await.unwrap_err();
+    assert_eq!(error.code(), tonic::Code::AlreadyExists);
+    assert!(matches!(
+        rx.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
+}
+
 struct Export {
     path: String,
     bytes: Vec<u8>,
@@ -87,10 +154,11 @@ fn export_probe() {
 
         let pool = db::connect("sqlite::memory:").await.unwrap();
         let (tx, rx) = tokio::sync::mpsc::channel(10);
-        let dispatcher = tokio::spawn(dispatch::run(rx, Arc::clone(&instrumentation)));
+        let dispatcher = tokio::spawn(dispatch::Dispatcher::new(pool.clone(), Arc::clone(&instrumentation)).run(rx, std::future::pending()));
         let handler = grpc::QueueServiceHandler::new(pool, tx, instrumentation);
         let mut request = Request::new(proto::EnqueueRequest {
             function_name: "telemetry.probe".into(),
+            service_name: "telemetry".into(),
             submission_key: "probe".into(),
             arguments: vec![1, 2, 3],
             caller: "telemetry-test".into(),

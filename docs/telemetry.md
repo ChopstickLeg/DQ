@@ -97,8 +97,6 @@ Telemetry does not automatically instrument every dependency or SQL statement.
 
 Job IDs appear on relevant logs and dispatch spans, but never as metric
 attributes. Request metrics include successful and failed requests.
-The dispatcher currently receives notifications and leaves jobs pending.
-Consumer delivery and execution are not implemented.
 
 ## Disabled behavior and shutdown
 
@@ -120,7 +118,7 @@ Export uses background batching and periodic metric collection. Collector
 availability does not determine whether a job is accepted. Export buffers are
 bounded, so telemetry can be dropped during an extended outage.
 
-Ctrl+C stops gRPC intake, drains dispatcher notifications, and shuts down the
+Ctrl+C stops gRPC intake, closes subscription streams, drains dispatcher notifications, and shuts down the
 providers while the Tokio runtime is still available. Shutdown attempts to flush
 all three signals. A forced kill cannot flush pending telemetry. Shutdown export
 failures are reported on standard error.

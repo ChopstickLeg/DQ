@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package example.voice.v1;
+
+message SynthesizeRequest {
+  string text = 1;
+  string voice = 2;
+}
+
+message SynthesizeResult {
+  string artifact_reference = 1;
+}

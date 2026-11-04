@@ -10,7 +10,7 @@ Install Rust through rustup and install the Protocol Buffers compiler (`protoc`)
 The repository's `rust-toolchain.toml` selects Rust 1.99.1, rustfmt, and Clippy.
 Keep `Cargo.lock` in version control to preserve dependency resolution.
 
-The current `sqlx::query!` and `sqlx::query_as!` calls require a SQLite database
+The `sqlx::query!` call requires a SQLite database
 with the current schema at compile time. Set `DATABASE_URL` to that database
 before building, or supply it in `.env` for the SQLx macros. Offline query
 metadata is not included yet. Runtime startup migrations cannot supply a schema
@@ -28,7 +28,9 @@ by the bound address after opening the listening socket.
 
 `Enqueue` stores a function name, submission key, binary Protobuf arguments, and
 logical caller. It returns a generated job ID after the pending job commits.
-`GetJobStatus` returns the saved status, function name, caller, and argument bytes.
+Workers receive jobs through `SubscribeExecution` and report the outcome with
+`CompleteExecution`. Clients can read outcomes through `SubscribeCompletion` or
+look up a known job ID with `GetJobStatus`.
 
 ## Configure the server
 
@@ -56,7 +58,7 @@ database, use `sqlite::memory:`. Jobs in that database do not survive a restart.
 See [telemetry configuration](docs/telemetry.md) to export OpenTelemetry logs,
 traces, and metrics. Export is disabled until an OTLP endpoint is configured.
 
-Run the five gRPC integration checks:
+Run the gRPC integration checks:
 
 ```powershell
 cargo test --locked --test durability
@@ -83,10 +85,14 @@ ports assigned by the operating system:
   the submission with `INTERNAL`. After removing the failure, it submits the same
   request again and retrieves the pending job, proving no partial job blocked
   the retry.
+- `pending_job_is_reassigned_and_its_committed_result_is_broadcast` checks
+  pending work after restart, worker reassignment, stale attempt rejection,
+  fan-out to two listeners, and completion retry after restart.
 
 The failure check accesses SQLite only to arrange and remove the fault. Job
-submission and retrieval assertions use gRPC. These Rust checks cover the server
-behavior. The C# caller smoke check remains separate work.
+submission and retrieval assertions use gRPC. The
+[C# SDK](sdks/csharp/README.md) and [Python SDK](sdks/python/dq_python/README.md)
+also have integration tests that start the Rust server.
 
 Run the remaining checks with:
 
@@ -98,7 +104,7 @@ cargo clippy --locked --all-targets -- -D warnings
 
 ## Change the schema
 
-Add a numbered SQL file to `migrations/`, for example `0002_add_priority.sql`.
+Add a numbered SQL file to `migrations/`, for example `0003_add_priority.sql`.
 Rebuild and restart the service to apply it. Keep existing migrations unchanged
 once applied, because SQLx checks their checksums on startup.
 

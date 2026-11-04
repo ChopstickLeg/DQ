@@ -211,11 +211,6 @@ pub struct Instrumentation {
     metrics: Option<QueueMetrics>,
 }
 
-pub struct DispatchJob {
-    pub job_id: String,
-    trace_context: Option<Context>,
-}
-
 impl Instrumentation {
     /// Measures an RPC without timers, attribute allocation, or context extraction
     /// for signals that are disabled.
@@ -272,22 +267,19 @@ impl Instrumentation {
         result
     }
 
-    pub fn dispatch_job(&self, job_id: String) -> DispatchJob {
-        DispatchJob {
-            job_id,
-            trace_context: self.traces.then(|| Span::current().context()),
-        }
+    pub fn dispatch_context(&self) -> Option<Context> {
+        self.traces.then(|| Span::current().context())
     }
 
-    pub async fn received(&self, job: DispatchJob) {
+    pub async fn received(&self, job_id: &str, trace_context: Option<Context>) {
         let operation = async {
-            tracing::info!(target: "dq::dispatch", job_id = %job.job_id, "Job notification received; consumer delivery is not implemented");
+            tracing::info!(target: "dq::dispatch", %job_id, "Job notification received");
             if let Some(metrics) = &self.metrics {
                 metrics.notifications.add(1, &[]);
             }
         };
-        if let Some(context) = job.trace_context {
-            let span = tracing::info_span!(target: "dq::dispatch", "dispatch.receive", job_id = %job.job_id);
+        if let Some(context) = trace_context {
+            let span = tracing::info_span!(target: "dq::dispatch", "dispatch.receive", %job_id);
             let _ = span.set_parent(context);
             operation.instrument(span).await;
         } else {

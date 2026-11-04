@@ -14,8 +14,12 @@ mod proto {
     tonic::include_proto!("dq.v1");
 }
 
+use proto::complete_execution_request::Outcome;
 use proto::queue_service_client::QueueServiceClient;
-use proto::{EnqueueRequest, GetJobStatusRequest, GetJobStatusResponse, JobStatus};
+use proto::{
+    CompleteExecutionRequest, EnqueueRequest, GetJobStatusRequest, GetJobStatusResponse, JobStatus,
+    SubscribeRequest,
+};
 
 #[derive(Clone, PartialEq, Message)]
 struct SmokeArguments {
@@ -90,6 +94,7 @@ async fn independent_jobs_have_distinct_ids_and_preserve_their_arguments() {
     let requests = [
         EnqueueRequest {
             function_name: "smoke.echo".to_owned(),
+            service_name: "smoke".to_owned(),
             submission_key: "first-job".to_owned(),
             arguments: SmokeArguments {
                 message: "first job".to_owned(),
@@ -100,6 +105,7 @@ async fn independent_jobs_have_distinct_ids_and_preserve_their_arguments() {
         },
         EnqueueRequest {
             function_name: "smoke.echo".to_owned(),
+            service_name: "smoke".to_owned(),
             submission_key: "second-job".to_owned(),
             arguments: SmokeArguments {
                 message: "second job".to_owned(),
@@ -131,9 +137,12 @@ async fn independent_jobs_have_distinct_ids_and_preserve_their_arguments() {
             job,
             GetJobStatusResponse {
                 status: JobStatus::Pending as i32,
+                service_name: request.service_name,
                 function_name: request.function_name,
                 caller: request.caller,
                 arguments: request.arguments,
+                result: None,
+                error: None,
             }
         );
     }
@@ -146,6 +155,7 @@ async fn duplicate_submission_is_rejected_without_changing_the_original_job() {
     let mut client = server.client().await;
     let request = EnqueueRequest {
         function_name: "smoke.echo".to_owned(),
+        service_name: "smoke".to_owned(),
         submission_key: "duplicate-job".to_owned(),
         arguments: SmokeArguments {
             message: "original job".to_owned(),
@@ -184,9 +194,12 @@ async fn duplicate_submission_is_rejected_without_changing_the_original_job() {
         job,
         GetJobStatusResponse {
             status: JobStatus::Pending as i32,
+            service_name: request.service_name,
             function_name: request.function_name,
             caller: request.caller,
             arguments: request.arguments,
+            result: None,
+            error: None,
         }
     );
 }
@@ -215,6 +228,7 @@ async fn acknowledged_job_survives_process_restart() {
     };
     let request = EnqueueRequest {
         function_name: "smoke.echo".to_owned(),
+        service_name: "smoke".to_owned(),
         submission_key: "restart-smoke".to_owned(),
         arguments: arguments.encode_to_vec(),
         caller: "rust-smoke".to_owned(),
@@ -245,9 +259,12 @@ async fn acknowledged_job_survives_process_restart() {
         job,
         GetJobStatusResponse {
             status: JobStatus::Pending as i32,
+            service_name: request.service_name,
             function_name: request.function_name,
             caller: request.caller,
             arguments: request.arguments,
+            result: None,
+            error: None,
         }
     );
     assert_eq!(
@@ -287,8 +304,8 @@ async fn failed_commit_is_not_acknowledged_and_submission_can_be_retried() {
 
     let mut transaction = database.begin().await.expect("begin a fault setup probe");
     sqlx::query(
-        "INSERT INTO jobs (id, function_name, submission_key, arguments, caller)
-         VALUES ('probe-id', 'smoke.probe', 'probe-key', X'0801', 'rust-smoke')",
+        "INSERT INTO jobs (id, function_name, service_name, submission_key, arguments, caller)
+         VALUES ('probe-id', 'smoke.probe', 'smoke', 'probe-key', X'0801', 'rust-smoke')",
     )
     .execute(&mut *transaction)
     .await
@@ -306,6 +323,7 @@ async fn failed_commit_is_not_acknowledged_and_submission_can_be_retried() {
 
     let request = EnqueueRequest {
         function_name: "smoke.echo".to_owned(),
+        service_name: "smoke".to_owned(),
         submission_key: "failed-commit-smoke".to_owned(),
         arguments: SmokeArguments {
             message: "retry after failed commit".to_owned(),
@@ -345,9 +363,110 @@ async fn failed_commit_is_not_acknowledged_and_submission_can_be_retried() {
         job,
         GetJobStatusResponse {
             status: JobStatus::Pending as i32,
+            service_name: request.service_name,
             function_name: request.function_name,
             caller: request.caller,
             arguments: request.arguments,
+            result: None,
+            error: None,
         }
     );
+}
+
+#[tokio::test]
+async fn pending_job_is_reassigned_and_its_committed_result_is_broadcast() {
+    let directory = tempfile::tempdir().unwrap();
+    let server = ServerProcess::start(directory.path());
+    let mut client = server.client().await;
+    let job = client
+        .enqueue(EnqueueRequest {
+            service_name: "smoke".into(),
+            function_name: "smoke.echo".into(),
+            submission_key: "worker-test".into(),
+            arguments: vec![0, 128, 255],
+            caller: "rust-smoke".into(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    drop(server);
+
+    let server = ServerProcess::start(directory.path());
+    let mut client = server.client().await;
+    let subscription = SubscribeRequest {
+        service_name: "smoke".into(),
+        function_names: vec!["smoke.echo".into()],
+    };
+    let mut listener_one = client
+        .subscribe_completion(subscription.clone())
+        .await
+        .unwrap()
+        .into_inner();
+    let mut listener_two = client
+        .subscribe_completion(subscription.clone())
+        .await
+        .unwrap()
+        .into_inner();
+    let mut first_worker = client
+        .subscribe_execution(subscription.clone())
+        .await
+        .unwrap()
+        .into_inner();
+    let first = tokio::time::timeout(Duration::from_secs(5), first_worker.message())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.job_id, job.job_id);
+    assert_eq!(first.arguments, vec![0, 128, 255]);
+    drop(first_worker);
+
+    let mut worker = client
+        .subscribe_execution(subscription)
+        .await
+        .unwrap()
+        .into_inner();
+    let assignment = tokio::time::timeout(Duration::from_secs(5), worker.message())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(assignment.job_id, job.job_id);
+    assert_ne!(assignment.attempt_id, first.attempt_id);
+    let report = CompleteExecutionRequest {
+        job_id: assignment.job_id.clone(),
+        attempt_id: assignment.attempt_id,
+        outcome: Some(Outcome::Result(vec![4, 2])),
+    };
+    let stale = client
+        .complete_execution(CompleteExecutionRequest {
+            attempt_id: first.attempt_id,
+            ..report.clone()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(stale.code(), Code::FailedPrecondition);
+    client.complete_execution(report.clone()).await.unwrap();
+    for listener in [&mut listener_one, &mut listener_two] {
+        let event = tokio::time::timeout(Duration::from_secs(5), listener.message())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(event.job_id, job.job_id);
+        assert_eq!(event.status, JobStatus::Completed as i32);
+        assert_eq!(event.result, Some(vec![4, 2]));
+    }
+
+    drop(server);
+    let server = ServerProcess::start(directory.path());
+    let mut client = server.client().await;
+    client.complete_execution(report).await.unwrap();
+    let status = client
+        .get_job_status(GetJobStatusRequest { job_id: job.job_id })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(status.status, JobStatus::Completed as i32);
+    assert_eq!(status.result, Some(vec![4, 2]));
 }

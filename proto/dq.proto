@@ -16,7 +16,10 @@ service QueueService {
   // Returns persisted state, metadata, and arguments, or NOT_FOUND.
   rpc GetJobStatus(GetJobStatusRequest) returns (GetJobStatusResponse);
   // Returns jobs to execute
-  rpc Subscribe(SubscribeRequest) returns (stream ExecuteRequest);
+  rpc SubscribeExecution(SubscribeRequest) returns (stream ExecuteRequest);
+  // Saves the outcome for an assignment before notifying subscribers.
+  rpc CompleteExecution(CompleteExecutionRequest) returns (CompleteExecutionResponse);
+  rpc SubscribeCompletion(SubscribeRequest) returns (stream ExecuteResponse);
 }
 
 message EnqueueRequest {
@@ -41,13 +44,27 @@ message GetJobStatusResponse {
   string function_name = 3;
   string caller = 4;
   bytes arguments = 5;
+  optional bytes result = 6;
+  optional string error = 7;
 }
 
 message ExecuteRequest {
   string job_id = 1;
   string function_name = 2;
   bytes arguments = 3;
+  string attempt_id = 4;
 }
+
+message CompleteExecutionRequest {
+  string job_id = 1;
+  string attempt_id = 2;
+  oneof outcome {
+    bytes result = 3;
+    string error = 4;
+  }
+}
+
+message CompleteExecutionResponse {}
 
 message SubscribeRequest {
   string service_name = 1;
@@ -55,5 +72,10 @@ message SubscribeRequest {
 }
 
 message ExecuteResponse {
-  bytes result = 1;
+  optional bytes result = 1;
+  string job_id = 2;
+  JobStatus status = 3;
+  optional string error = 4;
+  string service_name = 5;
+  string function_name = 6;
 }

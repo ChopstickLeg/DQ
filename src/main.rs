@@ -8,7 +8,7 @@ use grpc::QueueServiceHandler;
 use proto::queue_service_server::QueueServiceServer;
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::Server;
 
@@ -45,7 +45,11 @@ async fn run(
     tracing::info!(address = %listener.local_addr()?, "gRPC server listening");
 
     let (tx, rx) = mpsc::channel(100);
-    let mut dispatcher = tokio::spawn(dispatch::run(rx, Arc::clone(&instrumentation)));
+    let (stop_streams, shutdown) = oneshot::channel();
+    let dispatch = dispatch::Dispatcher::new(pool.clone(), Arc::clone(&instrumentation));
+    let mut dispatcher = tokio::spawn(dispatch.run(rx, async {
+        let _ = shutdown.await;
+    }));
 
     let server = Server::builder()
         .add_service(QueueServiceServer::new(QueueServiceHandler::new(
@@ -53,10 +57,11 @@ async fn run(
             tx,
             instrumentation,
         )))
-        .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
+        .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async move {
             if let Err(error) = tokio::signal::ctrl_c().await {
                 tracing::error!(error = %error, "Failed to listen for Ctrl+C");
             }
+            let _ = stop_streams.send(());
         });
 
     tokio::select! {
