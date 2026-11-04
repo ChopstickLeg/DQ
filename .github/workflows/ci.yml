@@ -74,7 +74,7 @@ jobs:
           trap 'docker rm -f dq-smoke >/dev/null 2>&1 || true; docker volume rm dq-ci-data >/dev/null 2>&1 || true' EXIT
           docker run --detach --name dq-smoke --volume dq-ci-data:/data --env OTEL_SDK_DISABLED=true dq:ci
           for attempt in {1..30}; do
-            if docker logs dq-smoke 2>&1 | rg -F 'Listening on 0.0.0.0:50051'; then
+            if [[ "$(docker logs dq-smoke 2>&1)" == *'Listening on 0.0.0.0:50051'* ]]; then
               docker exec dq-smoke test -s /data/dq.db
               exit 0
             fi
