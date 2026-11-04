@@ -24,10 +24,10 @@ service QueueService {
 
 message EnqueueRequest {
   string function_name = 1;
-  string service_name = 2;
-  string submission_key = 3;
-  bytes arguments = 4;
-  string caller = 5;
+  string submission_key = 2;
+  bytes arguments = 3;
+  string caller = 4;
+  string service_name = 5;
 }
 
 message EnqueueResponse {
@@ -40,10 +40,10 @@ message GetJobStatusRequest {
 
 message GetJobStatusResponse {
   JobStatus status = 1;
-  string service_name = 2;
-  string function_name = 3;
-  string caller = 4;
-  bytes arguments = 5;
+  string function_name = 2;
+  string caller = 3;
+  bytes arguments = 4;
+  string service_name = 5;
   optional bytes result = 6;
   optional string error = 7;
 }

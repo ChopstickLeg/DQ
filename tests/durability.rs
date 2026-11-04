@@ -7,8 +7,11 @@ use std::time::Duration;
 use prost::Message;
 use sqlx::Connection;
 use sqlx::sqlite::SqliteConnectOptions;
-use tonic::Code;
+use tonic::client::Grpc;
+use tonic::codegen::http::uri::PathAndQuery;
 use tonic::transport::{Channel, Endpoint};
+use tonic::{Code, Request, Response};
+use tonic_prost::ProstCodec;
 
 mod proto {
     tonic::include_proto!("dq.v1");
@@ -17,8 +20,8 @@ mod proto {
 use proto::complete_execution_request::Outcome;
 use proto::queue_service_client::QueueServiceClient;
 use proto::{
-    CompleteExecutionRequest, EnqueueRequest, GetJobStatusRequest, GetJobStatusResponse, JobStatus,
-    SubscribeRequest,
+    CompleteExecutionRequest, EnqueueRequest, EnqueueResponse, ExecuteRequest, GetJobStatusRequest,
+    GetJobStatusResponse, JobStatus, SubscribeRequest,
 };
 
 #[derive(Clone, PartialEq, Message)]
@@ -27,6 +30,30 @@ struct SmokeArguments {
     message: String,
     #[prost(bytes = "vec", tag = "2")]
     binary: Vec<u8>,
+}
+
+#[derive(Clone, PartialEq, Message)]
+struct LegacyEnqueueRequest {
+    #[prost(string, tag = "1")]
+    function_name: String,
+    #[prost(string, tag = "2")]
+    submission_key: String,
+    #[prost(bytes = "vec", tag = "3")]
+    arguments: Vec<u8>,
+    #[prost(string, tag = "4")]
+    caller: String,
+}
+
+#[derive(Clone, PartialEq, Message)]
+struct LegacyJobStatus {
+    #[prost(int32, tag = "1")]
+    status: i32,
+    #[prost(string, tag = "2")]
+    function_name: String,
+    #[prost(string, tag = "3")]
+    caller: String,
+    #[prost(bytes = "vec", tag = "4")]
+    arguments: Vec<u8>,
 }
 
 struct ServerProcess {
@@ -68,15 +95,151 @@ impl ServerProcess {
     }
 
     async fn client(&self) -> QueueServiceClient<Channel> {
-        let channel = Endpoint::from_shared(self.endpoint.clone())
+        QueueServiceClient::new(self.channel().await)
+    }
+
+    async fn channel(&self) -> Channel {
+        Endpoint::from_shared(self.endpoint.clone())
             .expect("valid server endpoint")
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(5))
             .connect()
             .await
-            .expect("connect to the Rust server");
-        QueueServiceClient::new(channel)
+            .expect("connect to the Rust server")
     }
+}
+
+#[tokio::test]
+async fn upgrades_existing_jobs_and_preserves_the_legacy_wire_contract() {
+    let directory = tempfile::tempdir().unwrap();
+    let options = SqliteConnectOptions::new()
+        .filename(directory.path().join("dq.db"))
+        .create_if_missing(true);
+    let mut database = sqlx::SqliteConnection::connect_with(&options)
+        .await
+        .unwrap();
+    let legacy_migrations = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/legacy");
+    sqlx::migrate::Migrator::new(legacy_migrations.as_path())
+        .await
+        .unwrap()
+        .run(&mut database)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO jobs (id, function_name, submission_key, arguments, caller)
+         VALUES ('legacy-job', 'smoke.echo', 'before-upgrade', X'00FF', 'old-caller')",
+    )
+    .execute(&mut database)
+    .await
+    .unwrap();
+    database.close().await.unwrap();
+
+    let server = ServerProcess::start(directory.path());
+    let mut client = Grpc::new(server.channel().await);
+    let get_status = PathAndQuery::from_static("/dq.v1.QueueService/GetJobStatus");
+    client.ready().await.unwrap();
+    let existing: Response<LegacyJobStatus> = client
+        .unary(
+            Request::new(GetJobStatusRequest {
+                job_id: "legacy-job".into(),
+            }),
+            get_status.clone(),
+            ProstCodec::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        existing.into_inner(),
+        LegacyJobStatus {
+            status: JobStatus::Pending as i32,
+            function_name: "smoke.echo".into(),
+            caller: "old-caller".into(),
+            arguments: vec![0, 255],
+        }
+    );
+
+    client.ready().await.unwrap();
+    let enqueued: Response<EnqueueResponse> = client
+        .unary(
+            Request::new(LegacyEnqueueRequest {
+                function_name: "smoke.echo".into(),
+                submission_key: "after-upgrade".into(),
+                arguments: vec![255, 128],
+                caller: "old-caller".into(),
+            }),
+            PathAndQuery::from_static("/dq.v1.QueueService/Enqueue"),
+            ProstCodec::default(),
+        )
+        .await
+        .unwrap();
+    let new_job = server
+        .client()
+        .await
+        .get_job_status(GetJobStatusRequest {
+            job_id: enqueued.into_inner().job_id,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(new_job.arguments, vec![255, 128]);
+    assert_eq!(new_job.caller, "old-caller");
+    assert!(new_job.service_name.is_empty());
+}
+
+#[tokio::test]
+async fn workers_take_turns_while_both_routes_have_pending_jobs() {
+    let directory = tempfile::tempdir().unwrap();
+    let server = ServerProcess::start(directory.path());
+    let mut client = server.client().await;
+    let mut workers = Vec::new();
+    for service in ["first", "second"] {
+        let stream = client
+            .subscribe_execution(SubscribeRequest {
+                service_name: service.into(),
+                function_names: vec!["smoke.echo".into()],
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        workers.push(stream);
+    }
+    let enqueue = |service: &str, key: &str| EnqueueRequest {
+        service_name: service.into(),
+        function_name: "smoke.echo".into(),
+        submission_key: key.into(),
+        ..Default::default()
+    };
+    let complete = |job: ExecuteRequest| CompleteExecutionRequest {
+        job_id: job.job_id,
+        attempt_id: job.attempt_id,
+        outcome: Some(Outcome::Result(Vec::new())),
+    };
+
+    client.enqueue(enqueue("first", "active")).await.unwrap();
+    let first = tokio::time::timeout(Duration::from_secs(5), workers[0].message())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    for (service, key) in [
+        ("first", "next-first"),
+        ("second", "next-second"),
+        ("second", "more-second"),
+    ] {
+        client.enqueue(enqueue(service, key)).await.unwrap();
+    }
+    client.complete_execution(complete(first)).await.unwrap();
+    let second = tokio::time::timeout(Duration::from_secs(5), workers[1].message())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    client.complete_execution(complete(second)).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), workers[0].message())
+        .await
+        .expect("the first worker should take the next turn")
+        .unwrap()
+        .unwrap();
 }
 
 impl Drop for ServerProcess {

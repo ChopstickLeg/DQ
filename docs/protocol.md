@@ -41,9 +41,14 @@ SQLite directly.
 
 `SubscribeExecution` takes a service name and a list of up to 1,000 function
 names. A job matches when both its service and function match the subscription.
-The dispatcher assigns one job at a time across all workers. A worker receives
+The dispatcher assigns one job at a time and rotates among workers with
+matching pending jobs. A worker receives
 the job ID, function name, arguments, and a unique `attempt_id`. Jobs queued
 before a worker connects are eligible for delivery.
+
+Jobs from before service routing was added use the empty service name.
+Older clients that omit `service_name` also submit to this route. A worker can
+subscribe to that route with an empty service name and the legacy function names.
 
 The worker calls `CompleteExecution` with the job ID, attempt ID, and either
 result bytes or an error string. An empty result is a valid success. The server
