@@ -13,7 +13,9 @@ class QueueClient:
     """Synchronous client for a running DQ server."""
 
     def __init__(self, address: str = "127.0.0.1:50051", *, timeout: float = 5.0) -> None:
-        self._channel = grpc.insecure_channel(address)
+        self._channel = grpc.insecure_channel(
+            address, options=[("grpc.max_receive_message_length", 8 * 1024 * 1024)]
+        )
         self._queue = dq_pb2_grpc.QueueServiceStub(self._channel)
         self._timeout = timeout
 

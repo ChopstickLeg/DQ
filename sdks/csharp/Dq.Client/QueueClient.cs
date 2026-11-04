@@ -13,7 +13,10 @@ public sealed class QueueClient : IDisposable
 
     public QueueClient(string address = "http://127.0.0.1:50051", TimeSpan? requestTimeout = null)
     {
-        _channel = GrpcChannel.ForAddress(address);
+        _channel = GrpcChannel.ForAddress(address, new GrpcChannelOptions
+        {
+            MaxReceiveMessageSize = 8 * 1024 * 1024,
+        });
         _queue = new QueueService.QueueServiceClient(_channel);
         _requestTimeout = requestTimeout ?? TimeSpan.FromSeconds(5);
     }

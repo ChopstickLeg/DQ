@@ -20,7 +20,10 @@ public sealed class QueueClientTests
         using var worker = new QueueClient(server.Address);
 
         using var completions = await caller.SubscribeCompletionAsync(Service, [Function], cancellation);
-        var marker = ByteString.CopyFrom(new byte[] { 0, 255 });
+        // The arguments and result fit separately, but exceed 4 MiB together.
+        var markerBytes = new byte[3 * 1024 * 1024];
+        markerBytes[^1] = 255;
+        var marker = ByteString.CopyFrom(markerBytes);
         var arguments = new ReverseRequest { Text = "héllo", Marker = marker };
         var jobId = await caller.EnqueueAsync(
             Service, Function, Guid.NewGuid().ToString(), arguments.ToByteString(),
@@ -40,7 +43,9 @@ public sealed class QueueClientTests
         Assert.Equal(jobId, completion.JobId);
         Assert.Equal(JobStatus.Completed, completion.Status);
         Assert.Equal(new ReverseResult { Text = "olléh", Marker = marker }, ReverseResult.Parser.ParseFrom(completion.Result));
-        Assert.Equal(completion.Result, (await caller.GetJobStatusAsync(jobId, cancellation)).Result);
+        var saved = await caller.GetJobStatusAsync(jobId, cancellation);
+        Assert.Equal(arguments.ToByteString(), saved.Arguments);
+        Assert.Equal(completion.Result, saved.Result);
     }
 
     [Fact]

@@ -39,20 +39,19 @@ SQLite directly.
 
 ## gRPC message size limits
 
-The server and both SDKs use a 4 MiB receive limit per encoded gRPC message.
-The limit includes the payload and the surrounding Protobuf fields. It applies
-to each message in a stream as well as to unary requests and responses.
+The server accepts up to 4 MiB per encoded gRPC request. The Python and C# SDKs
+accept up to 8 MiB per response message, including each message in a stream.
+These limits include the payload and the surrounding Protobuf fields.
 
 `Enqueue` and `CompleteExecution` send arguments and the outcome in separate
 requests. `GetJobStatus` sends the saved arguments and outcome together. For
-example, 3 MiB of arguments and a 3 MiB result can each be accepted and saved,
-but the combined status response exceeds the SDK receive limit. The SDK then
-reports `RESOURCE_EXHAUSTED` even though the job and result were saved.
+example, a status response with 3 MiB of arguments and a 3 MiB result fits
+within the SDKs' 8 MiB limit. Clients using the default 4 MiB receive limit can
+report `RESOURCE_EXHAUSTED` for that response even though the job and result were
+saved.
 
-To keep status lookups readable, leave room within 4 MiB for the combined
-arguments, result or error, and other response fields. For large inputs and
-outputs, store the data outside DQ and pass a small reference to it in the
-arguments or result.
+For inputs or outputs that exceed the request limit, store the data outside DQ
+and pass a small reference to it in the arguments or result.
 
 ## Execution and completion
 

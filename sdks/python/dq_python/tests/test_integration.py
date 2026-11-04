@@ -66,7 +66,9 @@ class QueueIntegrationTests(unittest.TestCase):
     def test_worker_decodes_service_protobuf_and_caller_receives_result(self) -> None:
         with QueueClient(self.address) as caller, QueueClient(self.address) as worker:
             completions = caller.subscribe_completion(SERVICE, [FUNCTION], timeout=TIMEOUT)
-            arguments = ReverseRequest(text="héllo", marker=b"\x00\xff").SerializeToString()
+            # The arguments and result fit separately, but exceed 4 MiB together.
+            marker = b"\x00\xff" * (3 * 1024 * 1024 // 2)
+            arguments = ReverseRequest(text="héllo", marker=marker).SerializeToString()
             job_id = caller.enqueue(SERVICE, FUNCTION, str(uuid4()), arguments, caller="python-test")
 
             assignments = worker.subscribe_execution(SERVICE, [FUNCTION], timeout=TIMEOUT)
@@ -82,9 +84,11 @@ class QueueIntegrationTests(unittest.TestCase):
             self.assertEqual(event.status, JobStatus.JOB_STATUS_COMPLETED)
             self.assertEqual(
                 ReverseResult.FromString(event.result),
-                ReverseResult(text="olléh", marker=b"\x00\xff"),
+                ReverseResult(text="olléh", marker=marker),
             )
-            self.assertEqual(caller.get_job_status(job_id).result, event.result)
+            saved = caller.get_job_status(job_id)
+            self.assertEqual(saved.arguments, arguments)
+            self.assertEqual(saved.result, event.result)
 
     def test_worker_error_reaches_the_caller(self) -> None:
         with QueueClient(self.address) as caller, QueueClient(self.address) as worker:
