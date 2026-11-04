@@ -89,18 +89,36 @@ jobs:
         run: dotnet nuget push 'dist/*.nupkg' --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
 
   server:
-    name: Publish Rust server to GitHub Releases
+    name: Publish Rust server to Docker Hub
     needs: verify
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: write
+    timeout-minutes: 15
+    environment: dockerhub
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: dq-server
-          path: dist
-      - name: Create GitHub release
+          pattern: dq-server-*
+          path: server
+      - name: Prepare tested binaries
+        shell: bash
+        run: |
+          for arch in amd64 arm64; do
+            mkdir -p "docker/$arch"
+            tar -xzf "server/dq-server-$arch/dq-linux-$arch.tar.gz" -C "docker/$arch"
+          done
+          docker buildx create --driver docker-container --use
+      - name: Sign in to Docker Hub
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes dist/dq-linux-x64.tar.gz
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: printf '%s' "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
+      - name: Push and verify the multi-platform image
+        shell: bash
+        run: |
+          image="chopstickleg/dq:$GITHUB_REF_NAME"
+          docker buildx build --platform linux/amd64,linux/arm64 --tag "$image" --push docker
+          docker buildx imagetools inspect --raw "$image" |
+            jq -e '[.manifests[] | select(.platform.os == "linux") | .platform.architecture] | sort == ["amd64", "arm64"]'
