@@ -4,16 +4,25 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+opentelemetry = "0.32"
+opentelemetry-appender-tracing = "0.32"
+opentelemetry-otlp = { version = "0.32", features = ["grpc-tonic", "tls-aws-lc", "tls-roots", "reqwest-rustls"] }
+opentelemetry_sdk = "0.32"
 prost = "0.14.4"
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite", "macros", "migrate"] }
-tokio = { version = "1.53.3", features = ["macros", "net", "rt-multi-thread"] }
+tokio = { version = "1.53.3", features = ["macros", "net", "rt-multi-thread", "sync", "signal", "time"] }
 tokio-stream = { version = "0.1.19", features = ["net"] }
 tonic = "0.14.6"
 tonic-prost = "0.14.6"
-uuid = { version = "1.28", features = ["v7"] }
+tracing = "0.1"
+tracing-opentelemetry = { version = "0.33", default-features = false }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1.28", features = ["v4", "v7"] }
 
 [build-dependencies]
 tonic-prost-build = "0.14.6"
 
 [dev-dependencies]
+axum = "0.8"
+opentelemetry-proto = { version = "0.32", features = ["gen-tonic-messages", "trace", "logs", "metrics"] }
 tempfile = "3"

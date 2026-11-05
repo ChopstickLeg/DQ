@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package example.echo.v1;
+
+message ReverseRequest {
+  string text = 1;
+  bytes marker = 2;
+}
+
+message ReverseResult {
+  string text = 1;
+  bytes marker = 2;
+}

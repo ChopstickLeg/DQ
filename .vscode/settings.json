@@ -3,8 +3,5 @@
     "editor.defaultFormatter": "rust-lang.rust-analyzer",
     "editor.formatOnSave": true
   },
-  "rust-analyzer.cargo.buildScripts.enable": true,
-  "rust-analyzer.cargo.extraEnv": {
-    "PROTOC": "C:\\ProgramData\\chocolatey\\lib\\protoc\\tools\\bin\\protoc.exe"
-  }
+  "rust-analyzer.cargo.buildScripts.enable": true
 }

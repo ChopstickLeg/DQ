@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Version>0.1.0</Version>
+    <Description>C# client and worker SDK for the DQ queue server.</Description>
+    <RepositoryUrl>https://github.com/ChopstickLeg/DQ</RepositoryUrl>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" Version="3.33.5" />
+    <PackageReference Include="Grpc.Net.Client" Version="2.76.0" />
+    <PackageReference Include="Grpc.Tools" Version="2.76.0" PrivateAssets="all" />
+    <Protobuf Include="../../../proto/dq.proto" GrpcServices="Client" />
+  </ItemGroup>
+</Project>
